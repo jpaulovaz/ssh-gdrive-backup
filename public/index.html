@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH-GDrive Backup Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .fade-in { animation: fadeIn 0.2s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .tab-active { border-bottom: 3px solid #3b82f6; color: #3b82f6; }
+        .card-hover:hover { transform: translateY(-2px); transition: all 0.2s; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+    <nav class="bg-slate-800 border-b border-slate-700 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-shield-alt text-blue-500 text-2xl"></i>
+                    <span class="text-xl font-bold tracking-tight">Backup <span class="text-blue-500">Pro</span></span>
+                </div>
+                <div class="flex gap-8 h-full">
+                    <button onclick="showTab('dashboard')" class="tab-btn h-full px-2 flex items-center gap-2 font-medium transition-all tab-active" id="tab-dashboard">
+                        <i class="fas fa-chart-line"></i> Dashboard
+                    </button>
+                    <button onclick="showTab('servers')" class="tab-btn h-full px-2 flex items-center gap-2 font-medium transition-all text-slate-400" id="tab-servers">
+                        <i class="fas fa-server"></i> Servidores
+                    </button>
+                    <button onclick="showTab('settings')" class="tab-btn h-full px-2 flex items-center gap-2 font-medium transition-all text-slate-400" id="tab-settings">
+                        <i class="fas fa-cog"></i> Configurações
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        <!-- DASHBOARD TAB -->
+        <div id="view-dashboard" class="tab-view fade-in">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700">
+                    <p class="text-slate-400 text-xs font-bold uppercase mb-1">Status Google</p>
+                    <div id="googleStatus" class="flex items-center gap-2 text-red-400 font-bold">
+                        <i class="fas fa-circle text-[10px]"></i> Desconectado
+                    </div>
+                </div>
+                <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700">
+                    <p class="text-slate-400 text-xs font-bold uppercase mb-1">Servidores</p>
+                    <p class="text-2xl font-bold" id="statServers">0</p>
+                </div>
+                <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700">
+                    <p class="text-slate-400 text-xs font-bold uppercase mb-1">Total Pastas</p>
+                    <p class="text-2xl font-bold" id="statFolders">0</p>
+                </div>
+                <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700">
+                    <p class="text-slate-400 text-xs font-bold uppercase mb-1">Próximo Backup</p>
+                    <p class="text-2xl font-bold text-blue-400" id="statNext">--:--</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-2 space-y-6" id="dashboardServers">
+                    <!-- Cards de servidores aqui -->
+                </div>
+                <div class="bg-slate-800 rounded-2xl border border-slate-700 p-6 h-fit">
+                    <h3 class="font-bold mb-4 flex items-center gap-2"><i class="fas fa-history"></i> Atividade Recente</h3>
+                    <div id="historyList" class="space-y-4 max-h-[500px] overflow-y-auto pr-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SERVERS TAB -->
+        <div id="view-servers" class="tab-view hidden fade-in">
+            <div class="flex justify-between items-center mb-8">
+                <h2 class="text-2xl font-bold">Gerenciar Servidores</h2>
+                <button onclick="openServerModal()" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all">
+                    <i class="fas fa-plus"></i> Novo Servidor
+                </button>
+            </div>
+            <div id="serversList" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+        </div>
+
+        <!-- SETTINGS TAB -->
+        <div id="view-settings" class="tab-view hidden fade-in">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Google Settings -->
+                <div class="bg-slate-800 rounded-2xl border border-slate-700 p-8">
+                    <h3 class="text-xl font-bold mb-6 flex items-center gap-2 text-blue-400">
+                        <i class="fab fa-google-drive"></i> Google Drive API
+                    </h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Client ID</label>
+                            <input type="text" id="setGoogleClientId" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Client Secret</label>
+                            <input type="password" id="setGoogleClientSecret" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Base Folder ID</label>
+                            <input type="text" id="setGoogleFolderId" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Refresh Token</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="setGoogleRefreshToken" class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none">
+                                <button onclick="runAuth()" class="bg-slate-700 hover:bg-slate-600 px-4 rounded-xl text-sm font-bold">Gerar</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Settings -->
+                <div class="bg-slate-800 rounded-2xl border border-slate-700 p-8">
+                    <h3 class="text-xl font-bold mb-6 flex items-center gap-2 text-blue-400">
+                        <i class="fas fa-clock"></i> Agendamento e Retenção
+                    </h3>
+                    <div class="space-y-6">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-400 mb-1">Horário</label>
+                                <input type="time" id="setScheduleTime" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-400 mb-1">Retenção (Qtd)</label>
+                                <input type="number" id="setRetention" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none" min="1">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-2">Dias da Semana</label>
+                            <div class="flex flex-wrap gap-2" id="daysContainer">
+                                <!-- Botões de dias aqui -->
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Callback URL (Auth)</label>
+                            <input type="text" id="setAuthCallback" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none" placeholder="http://seu-ip:3000/oauth2callback">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-8 flex justify-end">
+                <button onclick="saveAllSettings()" class="bg-blue-600 hover:bg-blue-500 px-12 py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-900/20 transition-all">
+                    Salvar Todas as Configurações
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- SERVER MODAL -->
+    <div id="serverModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-800 w-full max-w-2xl rounded-3xl border border-slate-700 p-8 shadow-2xl fade-in">
+            <h3 class="text-2xl font-bold mb-6" id="modalTitle">Novo Servidor</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div class="md:col-span-2">
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Identificador (ID)</label>
+                    <input type="text" id="mServerId" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Host (IP)</label>
+                    <input type="text" id="mServerHost" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Porta</label>
+                    <input type="number" id="mServerPort" value="22" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Usuário</label>
+                    <input type="text" id="mServerUser" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Senha</label>
+                    <input type="password" id="mServerPass" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500">
+                </div>
+            </div>
+            
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-3">
+                    <label class="text-xs font-bold text-slate-500 uppercase">Pastas para Backup</label>
+                    <button onclick="addFolderRow()" class="text-blue-400 text-xs font-bold hover:underline">+ Adicionar Pasta</button>
+                </div>
+                <div id="modalFolders" class="space-y-3 max-h-40 overflow-y-auto pr-2"></div>
+            </div>
+
+            <div class="flex justify-end gap-4">
+                <button onclick="closeServerModal()" class="px-6 py-3 text-slate-400 font-bold">Cancelar</button>
+                <button onclick="saveServer()" class="bg-blue-600 hover:bg-blue-500 px-8 py-3 rounded-xl font-bold transition-all">Salvar Servidor</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="hidden fixed bottom-8 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-8 py-4 rounded-2xl shadow-2xl z-[100] font-bold fade-in"></div>
+
+    <script>
+        let currentSettings = {};
+        let editingServerId = null;
+        const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+        async function loadAll() {
+            const res = await fetch('/api/settings');
+            currentSettings = await res.json();
+            
+            const historyRes = await fetch('/api/history');
+            const history = await historyRes.json();
+
+            const statusRes = await fetch('/api/status');
+            const status = await statusRes.json();
+
+            renderDashboard(status, history);
+            renderServersList();
+            fillSettings();
+            updateStats(status);
+        }
+
+        function showTab(tab) {
+            document.querySelectorAll('.tab-view').forEach(v => v.classList.add('hidden'));
+            document.getElementById(`view-${tab}`).classList.remove('hidden');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active', 'text-blue-500'));
+            document.getElementById(`tab-${tab}`).classList.add('tab-active', 'text-blue-500');
+        }
+
+        function renderDashboard(status, history) {
+            const container = document.getElementById('dashboardServers');
+            container.innerHTML = status.servers.map(s => `
+                <div class="bg-slate-800 rounded-2xl border border-slate-700 p-6 card-hover">
+                    <div class="flex justify-between items-start mb-6">
+                        <div>
+                            <h3 class="text-xl font-bold">${s.id}</h3>
+                            <p class="text-slate-500 text-sm font-mono">${s.host}</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-3">
+                        ${s.folders.map(f => `
+                            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center justify-between">
+                                <div>
+                                    <p class="font-bold text-slate-200">${f.name}</p>
+                                    <p class="text-[10px] text-slate-500 uppercase font-bold mt-1">
+                                        ${f.lastBackup ? 'Último: ' + new Date(f.lastBackup).toLocaleString() : 'Sem backup'}
+                                    </p>
+                                    <p class="text-[11px] text-blue-400 font-medium mt-1">${f.status.status}</p>
+                                </div>
+                                <button onclick="triggerBackup('${s.id}', '${f.name}')" ${f.status.running ? 'disabled' : ''} 
+                                    class="bg-blue-600/10 hover:bg-blue-600 text-blue-500 hover:text-white p-3 rounded-xl transition-all disabled:opacity-50">
+                                    <i class="fas ${f.status.running ? 'fa-spinner fa-spin' : 'fa-play'}"></i>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            const histContainer = document.getElementById('historyList');
+            histContainer.innerHTML = history.length ? history.map(h => `
+                <div class="border-l-2 ${h.success ? 'border-green-500' : 'border-red-500'} pl-4 py-1">
+                    <p class="text-xs font-bold ${h.success ? 'text-green-400' : 'text-red-400'}">${h.success ? 'SUCESSO' : 'FALHA'}</p>
+                    <p class="text-sm font-medium truncate">${h.server} > ${h.folder}</p>
+                    <p class="text-[10px] text-slate-500">${new Date(h.timestamp).toLocaleString()}</p>
+                </div>
+            `).join('') : '<p class="text-slate-500 text-sm italic">Nenhuma atividade.</p>';
+
+            const gStatus = document.getElementById('googleStatus');
+            if (currentSettings.google.refreshToken) {
+                gStatus.innerHTML = '<i class="fas fa-circle text-[10px]"></i> Conectado';
+                gStatus.className = 'flex items-center gap-2 text-green-400 font-bold';
+            }
+        }
+
+        function renderServersList() {
+            const container = document.getElementById('serversList');
+            container.innerHTML = currentSettings.servers.map(s => `
+                <div class="bg-slate-800 rounded-2xl border border-slate-700 p-6">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h4 class="font-bold text-lg">${s.id}</h4>
+                            <p class="text-slate-500 text-sm">${s.username}@${s.host}:${s.port || 22}</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="editServer('${s.id}')" class="text-slate-400 hover:text-blue-400 p-2"><i class="fas fa-edit"></i></button>
+                            <button onclick="deleteServer('${s.id}')" class="text-slate-400 hover:text-red-400 p-2"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        ${s.backups.map(b => `<span class="bg-slate-700 px-3 py-1 rounded-lg text-xs font-medium">${b.name}</span>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function fillSettings() {
+            document.getElementById('setGoogleClientId').value = currentSettings.google.clientId;
+            document.getElementById('setGoogleClientSecret').value = currentSettings.google.clientSecret;
+            document.getElementById('setGoogleFolderId').value = currentSettings.google.baseFolderId;
+            document.getElementById('setGoogleRefreshToken').value = currentSettings.google.refreshToken;
+            document.getElementById('setScheduleTime').value = currentSettings.schedule.time;
+            document.getElementById('setRetention').value = currentSettings.system.retentionLimit;
+            document.getElementById('setAuthCallback').value = currentSettings.system.authCallbackUrl;
+
+            const daysCont = document.getElementById('daysContainer');
+            daysCont.innerHTML = days.map((d, i) => `
+                <button onclick="toggleDay(${i})" id="day-${i}" 
+                    class="px-4 py-2 rounded-xl text-sm font-bold transition-all border ${currentSettings.schedule.days.includes(i) ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-900 border-slate-700 text-slate-500'}">
+                    ${d}
+                </button>
+            `).join('');
+        }
+
+        function toggleDay(day) {
+            const idx = currentSettings.schedule.days.indexOf(day);
+            if (idx > -1) currentSettings.schedule.days.splice(idx, 1);
+            else currentSettings.schedule.days.push(day);
+            fillSettings();
+        }
+
+        async function saveAllSettings() {
+            currentSettings.google.clientId = document.getElementById('setGoogleClientId').value;
+            currentSettings.google.clientSecret = document.getElementById('setGoogleClientSecret').value;
+            currentSettings.google.baseFolderId = document.getElementById('setGoogleFolderId').value;
+            currentSettings.google.refreshToken = document.getElementById('setGoogleRefreshToken').value;
+            currentSettings.schedule.time = document.getElementById('setScheduleTime').value;
+            currentSettings.system.retentionLimit = parseInt(document.getElementById('setRetention').value);
+            currentSettings.system.authCallbackUrl = document.getElementById('setAuthCallback').value;
+
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(currentSettings)
+            });
+            if (res.ok) showToast('Configurações salvas com sucesso!');
+        }
+
+        // Server Modal Logic
+        function openServerModal() {
+            editingServerId = null;
+            document.getElementById('modalTitle').innerText = 'Novo Servidor';
+            document.getElementById('mServerId').value = '';
+            document.getElementById('mServerHost').value = '';
+            document.getElementById('mServerPort').value = '22';
+            document.getElementById('mServerUser').value = '';
+            document.getElementById('mServerPass').value = '';
+            document.getElementById('modalFolders').innerHTML = '';
+            addFolderRow();
+            document.getElementById('serverModal').classList.remove('hidden');
+        }
+
+        function addFolderRow(name = '', path = '') {
+            const div = document.createElement('div');
+            div.className = 'flex gap-2 folder-row';
+            div.innerHTML = `
+                <input type="text" placeholder="Nome (ex: docker)" value="${name}" class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm outline-none">
+                <input type="text" placeholder="Caminho Remoto" value="${path}" class="flex-[2] bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm outline-none">
+                <button onclick="this.parentElement.remove()" class="text-red-500 px-2"><i class="fas fa-times"></i></button>
+            `;
+            document.getElementById('modalFolders').appendChild(div);
+        }
+
+        function saveServer() {
+            const id = document.getElementById('mServerId').value;
+            const folders = [];
+            document.querySelectorAll('.folder-row').forEach(row => {
+                const inputs = row.querySelectorAll('input');
+                if (inputs[0].value && inputs[1].value) {
+                    folders.push({ name: inputs[0].value, remotePath: inputs[1].value });
+                }
+            });
+
+            const serverData = {
+                id,
+                host: document.getElementById('mServerHost').value,
+                port: parseInt(document.getElementById('mServerPort').value),
+                username: document.getElementById('mServerUser').value,
+                password: document.getElementById('mServerPass').value,
+                backups: folders
+            };
+
+            if (editingServerId) {
+                const idx = currentSettings.servers.findIndex(s => s.id === editingServerId);
+                currentSettings.servers[idx] = serverData;
+            } else {
+                currentSettings.servers.push(serverData);
+            }
+
+            saveAllSettings();
+            closeServerModal();
+            renderServersList();
+        }
+
+        function editServer(id) {
+            const s = currentSettings.servers.find(srv => srv.id === id);
+            editingServerId = id;
+            document.getElementById('modalTitle').innerText = 'Editar Servidor';
+            document.getElementById('mServerId').value = s.id;
+            document.getElementById('mServerHost').value = s.host;
+            document.getElementById('mServerPort').value = s.port || 22;
+            document.getElementById('mServerUser').value = s.username;
+            document.getElementById('mServerPass').value = s.password;
+            document.getElementById('modalFolders').innerHTML = '';
+            s.backups.forEach(b => addFolderRow(b.name, b.remotePath));
+            document.getElementById('serverModal').classList.remove('hidden');
+        }
+
+        function deleteServer(id) {
+            if (confirm(`Deseja remover o servidor ${id}?`)) {
+                currentSettings.servers = currentSettings.servers.filter(s => s.id !== id);
+                saveAllSettings();
+                renderServersList();
+            }
+        }
+
+        function closeServerModal() { document.getElementById('serverModal').classList.add('hidden'); }
+
+        async function triggerBackup(sid, fname) {
+            showToast(`Iniciando backup de ${fname}...`);
+            await fetch(`/backup/${sid}/${fname}`);
+            loadAll();
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.classList.remove('hidden');
+            setTimeout(() => t.classList.add('hidden'), 3000);
+        }
+
+        function updateStats(status) {
+            document.getElementById('statServers').innerText = status.servers.length;
+            document.getElementById('statFolders').innerText = status.servers.reduce((a, b) => a + b.folders.length, 0);
+            document.getElementById('statNext').innerText = currentSettings.schedule.time;
+        }
+
+        async function runAuth() {
+            showToast('Iniciando script de autenticação...');
+            // Como o auth.js é um processo separado, apenas avisamos o usuário
+            alert('Execute "node auth.js" no seu terminal para gerar o token.');
+        }
+
+        // Pausar refresh se houver algum input focado
+        setInterval(() => {
+            const activeEl = document.activeElement;
+            const isInput = activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA';
+            if (!isInput) {
+                loadAll();
+            }
+        }, 5000);
+        window.onload = loadAll;
+    </script>
+</body>
+</html>

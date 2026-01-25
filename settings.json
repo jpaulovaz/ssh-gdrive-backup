@@ -1,0 +1,20 @@
+{
+  "google": {
+    "clientId": "",
+    "clientSecret": "",
+    "refreshToken": "",
+    "baseFolderId": ""
+  },
+  "servers": [],
+  "system": {
+    "port": 8990,
+    "retentionLimit": 2,
+    "authCallbackUrl": "http://localhost:3000/oauth2callback",
+    "authPort": 3000
+  },
+  "schedule": {
+    "enabled": true,
+    "time": "00:00",
+    "days": [0, 1, 2, 3, 4, 5, 6]
+  }
+}

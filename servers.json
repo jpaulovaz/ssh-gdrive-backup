@@ -1,0 +1,30 @@
+[
+  {
+    "id": "server1",
+    "host": "192.168.1.10",
+    "username": "root",
+    "password": "password123",
+    "backups": [
+      {
+        "name": "folderX",
+        "remotePath": "/var/www/html"
+      },
+      {
+        "name": "database",
+        "remotePath": "/var/lib/mysql_backups"
+      }
+    ]
+  },
+  {
+    "id": "server2",
+    "host": "192.168.1.11",
+    "username": "admin",
+    "password": "adminpassword",
+    "backups": [
+      {
+        "name": "config",
+        "remotePath": "/etc/nginx"
+      }
+    ]
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "retentionLimit": 2,
+  "schedule": {
+    "enabled": true,
+    "time": "00:00",
+    "days": [0, 1, 2, 3, 4, 5, 6]
+  }
+}
