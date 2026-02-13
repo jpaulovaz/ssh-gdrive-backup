@@ -18,8 +18,6 @@ if (!settings || !settings.google.clientId || !settings.google.clientSecret) {
     process.exit(1);
 }
 
-// O Google NÃO permite IPs privados (192.168.x.x) como Redirect URI.
-// A melhor prática para servidores remotos é usar localhost e fazer um túnel SSH.
 const PORT = settings.system.authPort || 3000;
 const REDIRECT_URI = `http://localhost:${PORT}/oauth2callback`;
 
@@ -43,6 +41,7 @@ app.get('/oauth2callback', async (req, res) => {
     const { code } = req.query;
     if (code) {
         try {
+            console.log('\n[Auth] Código recebido. Trocando por tokens...');
             const { tokens } = await oauth2Client.getToken(code);
             
             const currentSettings = getSettings();
@@ -56,21 +55,23 @@ app.get('/oauth2callback', async (req, res) => {
             
             setTimeout(() => process.exit(0), 3000);
         } catch (error) {
-            console.error('Erro ao obter token:', error.message);
-            res.status(500).send('Erro na autenticação.');
+            console.error('\n❌ ERRO DETALHADO DO GOOGLE:');
+            if (error.response && error.response.data) {
+                console.error(JSON.stringify(error.response.data, null, 2));
+            } else {
+                console.error(error.message);
+            }
+            
+            console.log('\n💡 DICA: Verifique se o Client Secret no Dashboard não tem espaços extras e se o tipo de app no Google Console é "Web Application".');
+            
+            res.status(500).send(`<h1>Erro na autenticação</h1><pre>${error.message}</pre>`);
         }
     }
 });
 
-console.log('\n=== Autenticação Google Drive ===');
-console.log('⚠️  IMPORTANTE: O Google não aceita IPs privados (192.168.x.x).');
-console.log(`\n1. No Google Cloud Console, adicione este URI de Redirecionamento:`);
-console.log(`   \x1b[33m${REDIRECT_URI}\x1b[0m`);
-
-console.log('\n2. Se você estiver em um servidor remoto, execute este comando no SEU COMPUTADOR LOCAL:');
-console.log(`   \x1b[32mssh -L ${PORT}:localhost:${PORT} seu-usuario@ip-do-servidor\x1b[0m`);
-
-console.log('\n3. Agora, abra o link abaixo no seu navegador:');
+console.log('\n=== Autenticação Google Drive (Diagnóstico) ===');
+console.log(`\n1. URI de Redirecionamento configurada: ${REDIRECT_URI}`);
+console.log('2. Abra o link abaixo no seu navegador:');
 console.log('\n\x1b[36m%s\x1b[0m', authUrl);
 
 app.listen(PORT, '0.0.0.0', () => {

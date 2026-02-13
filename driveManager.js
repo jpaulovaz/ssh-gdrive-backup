@@ -72,54 +72,68 @@ class DriveManager {
         }
     }
 
-    async uploadFile(filePath, fileName, serverName, folderName, onProgress, retentionLimit) {
-        try {
-            if (onProgress) onProgress(`Preparando estrutura de pastas no Google Drive...`);
-            
-            // 1. Criar/Obter pasta do Servidor
-            const serverFolderId = await this.getOrCreateFolder(serverName, this.baseFolderId);
-            
-            // 2. Criar/Obter subpasta específica do Backup (Ex: docker, grafana)
-            const backupFolderId = await this.getOrCreateFolder(folderName, serverFolderId);
+    async uploadFile(filePath, fileName, serverName, folderName, onProgress, retentionLimit, retryCount = 3) {
+        let lastError;
+        
+        for (let i = 0; i < retryCount; i++) {
+            try {
+                if (i > 0) {
+                    console.log(`[Drive] Tentativa ${i + 1} de ${retryCount} após erro...`);
+                    if (onProgress) onProgress(`Erro temporário. Tentando novamente (${i + 1}/${retryCount})...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000)); // Espera 5s antes de tentar de novo
+                }
 
-            const fileSize = fs.statSync(filePath).size;
-            const fileMetadata = {
-                name: fileName,
-                parents: [backupFolderId],
-            };
-            
-            const media = {
-                mimeType: 'application/gzip',
-                body: fs.createReadStream(filePath),
-            };
+                if (onProgress && i === 0) onProgress(`Preparando estrutura de pastas no Google Drive...`);
+                
+                const serverFolderId = await this.getOrCreateFolder(serverName, this.baseFolderId);
+                const backupFolderId = await this.getOrCreateFolder(folderName, serverFolderId);
 
-            const response = await this.drive.files.create({
-                resource: fileMetadata,
-                media: media,
-                fields: 'id, name',
-            }, {
-                onUploadProgress: evt => {
-                    if (onProgress) {
-                        const progress = Math.round((evt.bytesRead / fileSize) * 100);
-                        if (progress % 5 === 0) {
-                            onProgress(`Upload Google Drive: ${progress}%`);
+                const fileSize = fs.statSync(filePath).size;
+                const fileMetadata = {
+                    name: fileName,
+                    parents: [backupFolderId],
+                };
+                
+                const media = {
+                    mimeType: 'application/gzip',
+                    body: fs.createReadStream(filePath),
+                };
+
+                const response = await this.drive.files.create({
+                    resource: fileMetadata,
+                    media: media,
+                    fields: 'id, name',
+                }, {
+                    onUploadProgress: evt => {
+                        if (onProgress) {
+                            const progress = Math.round((evt.bytesRead / fileSize) * 100);
+                            if (progress % 5 === 0) {
+                                onProgress(`Upload Google Drive: ${progress}%`);
+                            }
                         }
                     }
+                });
+
+                const uploadedFileId = response.data.id;
+                
+                if (uploadedFileId && retentionLimit) {
+                    if (onProgress) onProgress(`Upload concluído. Organizando backups antigos...`);
+                    await this.rotateBackups(backupFolderId, retentionLimit);
                 }
-            });
 
-            const uploadedFileId = response.data.id;
-            
-            if (uploadedFileId && retentionLimit) {
-                if (onProgress) onProgress(`Upload concluído. Organizando backups antigos desta pasta...`);
-                await this.rotateBackups(backupFolderId, retentionLimit);
+                return uploadedFileId;
+            } catch (error) {
+                lastError = error;
+                console.error(`[Drive] Erro na tentativa ${i + 1}:`, error.message);
+                
+                // Se o erro for invalid_client, não adianta tentar de novo sem corrigir as credenciais
+                if (error.message.includes('invalid_client')) {
+                    throw error;
+                }
             }
-
-            return uploadedFileId;
-        } catch (error) {
-            console.error('[Drive] Erro crítico no upload:', error.message);
-            throw error;
         }
+        
+        throw lastError;
     }
 }
 
