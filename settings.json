@@ -9,6 +9,7 @@
   "system": {
     "port": 8990,
     "retentionLimit": 2,
+    "backupTimeout": 60,
     "authCallbackUrl": "http://localhost:3000/oauth2callback",
     "authPort": 3000
   },

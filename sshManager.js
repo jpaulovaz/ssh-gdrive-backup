@@ -7,17 +7,20 @@ class SSHManager {
         this.config = serverConfig;
     }
 
-    async createRemoteBackup(remotePath, localDest, onProgress) {
+    async createRemoteBackup(remotePath, localDest, onProgress, timeoutMinutes = 60) {
         return new Promise((resolve, reject) => {
             const conn = new Client();
             let isFinished = false;
             
+            // Converter minutos para milissegundos
+            const timeoutMs = timeoutMinutes * 60 * 1000;
+            
             const timeout = setTimeout(() => {
                 if (!isFinished) {
                     conn.end();
-                    reject(new Error('Tempo limite de 30 minutos excedido no SSH'));
+                    reject(new Error(`Tempo limite de ${timeoutMinutes} minutos excedido no SSH`));
                 }
-            }, 30 * 60 * 1000);
+            }, timeoutMs);
 
             const fileName = `${path.basename(remotePath)}_${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
             const remoteTempFile = `/tmp/${fileName}`;
@@ -104,7 +107,6 @@ class SSHManager {
                     stream.on('close', () => startDownload());
                 });
             }).on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
-                // Suporte para servidores que exigem autenticação interativa
                 if (prompts.length > 0 && prompts[0].prompt.toLowerCase().includes('password')) {
                     finish([this.config.password]);
                 } else {
@@ -118,7 +120,7 @@ class SSHManager {
                 port: this.config.port || 22,
                 username: this.config.username,
                 password: this.config.password,
-                tryKeyboard: true, // Habilita tentativa de teclado interativo
+                tryKeyboard: true,
                 readyTimeout: 20000
             });
         });

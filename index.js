@@ -44,9 +44,12 @@ async function runBackup(server, backupConfig) {
     try {
         // 1. SSH
         const ssh = new SSHManager(server);
-        const result = await ssh.createRemoteBackup(backupConfig.remotePath, TEMP_DIR, (msg) => {
-            backupStatus[statusKey].status = msg;
-        });
+        const result = await ssh.createRemoteBackup(
+            backupConfig.remotePath, 
+            TEMP_DIR, 
+            (msg) => { backupStatus[statusKey].status = msg; },
+            settings.system.backupTimeout || 60
+        );
         
         // 2. Google Drive
         const drive = new DriveManager(settings.google);

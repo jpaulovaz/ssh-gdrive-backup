@@ -128,6 +128,10 @@
                                 <label class="block text-sm font-medium text-slate-400 mb-1">Retenção (Qtd)</label>
                                 <input type="number" id="setRetention" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none" min="1">
                             </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-400 mb-1">Timeout (Minutos)</label>
+                                <input type="number" id="setTimeout" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:border-blue-500 outline-none" min="1">
+                            </div>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-slate-400 mb-2">Dias da Semana</label>
@@ -296,6 +300,7 @@
             document.getElementById('setGoogleRefreshToken').value = currentSettings.google.refreshToken;
             document.getElementById('setScheduleTime').value = currentSettings.schedule.time;
             document.getElementById('setRetention').value = currentSettings.system.retentionLimit;
+            document.getElementById('setTimeout').value = currentSettings.system.backupTimeout || 60;
             document.getElementById('setAuthCallback').value = currentSettings.system.authCallbackUrl;
 
             const daysCont = document.getElementById('daysContainer');
@@ -321,6 +326,7 @@
             currentSettings.google.refreshToken = document.getElementById('setGoogleRefreshToken').value;
             currentSettings.schedule.time = document.getElementById('setScheduleTime').value;
             currentSettings.system.retentionLimit = parseInt(document.getElementById('setRetention').value);
+            currentSettings.system.backupTimeout = parseInt(document.getElementById('setTimeout').value);
             currentSettings.system.authCallbackUrl = document.getElementById('setAuthCallback').value;
 
             const res = await fetch('/api/settings', {
