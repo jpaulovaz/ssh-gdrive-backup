@@ -1,19 +1,25 @@
 {
   "name": "ssh-gdrive-backup",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "description": "Backups via SSH com validação de integridade, retenção segura e envio ao Google Drive.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "test": "node --test",
+    "check": "node --check index.js && node --check sshManager.js && node --check driveManager.js && node --check googleAuthManager.js && node --check public/app.js && node --check lib/atomicJsonStore.js && node --check lib/backupIntegrity.js && node --check lib/cookies.js && node --check lib/driveQuery.js && node --check lib/scheduler.js && node --check lib/securityManager.js && node --check lib/settingsStore.js && node --check lib/validation.js && node --check test/core.test.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "backup",
+    "ssh",
+    "google-drive"
+  ],
+  "author": "João Paulo Vaz",
+  "license": "MIT",
   "dependencies": {
-    "archiver": "^7.0.1",
-    "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "fs-extra": "^11.3.3",
     "googleapis": "^170.1.0",
     "node-cron": "^4.2.1",
     "ssh2": "^1.17.0"

@@ -1,0 +1,8 @@
+node_modules/
+temp_backups/
+settings.json.bak
+history.json.bak
+data/*
+!data/.gitkeep
+*.tmp
+*.log
