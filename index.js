@@ -127,7 +127,8 @@ async function runBackup(server, backupConfig, source = 'manual') {
                 const current = backupStatus.get(key) || {};
                 backupStatus.set(key, { ...current, status: message, running: true });
             },
-            settings.system.backupTimeout || 60
+            settings.system.backupTimeout || 60,
+            { accessMode: backupConfig.accessMode || 'standard' }
         );
         localPath = sshResult.localPath;
 
@@ -160,7 +161,8 @@ async function runBackup(server, backupConfig, source = 'manual') {
             size: sshResult.size,
             sha256: sshResult.sha256,
             md5: sshResult.md5,
-            driveFileId: driveResult.fileId
+            driveFileId: driveResult.fileId,
+            accessMode: sshResult.accessMode || backupConfig.accessMode || 'standard'
         });
 
         backupStatus.set(key, {
@@ -245,7 +247,13 @@ async function getGoogleStatus(force = false) {
         try {
             const drive = new DriveManager(settings.google);
             const result = await drive.testConnection();
-            value = { ...result, configured: true, message: 'Conexão validada.' };
+            value = {
+                ...result,
+                configured: true,
+                message: result.baseFolderStatus === 'validated'
+                    ? 'Conexão e pasta base validadas.'
+                    : result.baseFolderMessage
+            };
         } catch (error) {
             value = { connected: false, configured: true, message: error.message };
         }
@@ -460,7 +468,7 @@ async function start() {
     });
     await googleAuthManager.start(mainPort);
     await setupCron();
-    console.log(`[System] SSH-GDrive Backup Pro v1.1.0 na porta ${mainPort}`);
+    console.log(`[System] SSH-GDrive Backup Pro v1.1.1 na porta ${mainPort}`);
     return server;
 }
 

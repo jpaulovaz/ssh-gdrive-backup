@@ -6,6 +6,18 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function googleErrorStatus(error) {
+    const raw = error?.code ?? error?.response?.status ?? error?.response?.data?.error?.code;
+    const status = Number(raw);
+    return Number.isInteger(status) ? status : 0;
+}
+
+function isFolderVisibilityError(error) {
+    const status = googleErrorStatus(error);
+    if (status === 403 || status === 404) return true;
+    return /file not found|not found|permission|forbidden|insufficient permissions/i.test(String(error?.message || ''));
+}
+
 class DriveManager {
     constructor(googleConfig) {
         if (!googleConfig.clientId || !googleConfig.clientSecret || !googleConfig.refreshToken) {
@@ -23,23 +35,56 @@ class DriveManager {
 
     async testConnection() {
         const response = await this.drive.about.get({ fields: 'user' });
-        let baseFolderName = 'Meu Drive';
-        if (this.baseFolderId !== 'root') {
+        const result = {
+            connected: true,
+            displayName: response.data.user?.displayName || '',
+            emailAddress: response.data.user?.emailAddress || '',
+            baseFolderId: this.baseFolderId,
+            baseFolderName: 'Meu Drive',
+            baseFolderStatus: 'validated',
+            baseFolderMessage: 'Pasta base validada.'
+        };
+
+        if (this.baseFolderId === 'root') return result;
+
+        try {
             const folder = await this.drive.files.get({
                 fileId: this.baseFolderId,
                 fields: 'id, name, mimeType, trashed'
             });
-            if (folder.data.trashed || folder.data.mimeType !== 'application/vnd.google-apps.folder') {
-                throw new Error('A pasta base configurada não é uma pasta válida ou está na lixeira.');
+
+            if (folder.data.trashed) {
+                return {
+                    ...result,
+                    baseFolderName: folder.data.name || this.baseFolderId,
+                    baseFolderStatus: 'invalid',
+                    baseFolderMessage: 'A pasta base configurada está na lixeira.'
+                };
             }
-            baseFolderName = folder.data.name || this.baseFolderId;
+
+            if (folder.data.mimeType !== 'application/vnd.google-apps.folder') {
+                return {
+                    ...result,
+                    baseFolderName: folder.data.name || this.baseFolderId,
+                    baseFolderStatus: 'invalid',
+                    baseFolderMessage: 'O ID configurado não corresponde a uma pasta do Google Drive.'
+                };
+            }
+
+            return {
+                ...result,
+                baseFolderName: folder.data.name || this.baseFolderId
+            };
+        } catch (error) {
+            if (!isFolderVisibilityError(error)) throw error;
+
+            return {
+                ...result,
+                baseFolderName: this.baseFolderId,
+                baseFolderStatus: 'unverified',
+                baseFolderMessage: 'A conta Google está conectada, mas os metadados da pasta base não puderam ser consultados. Isso pode ocorrer com o escopo limitado drive.file ou quando a pasta não foi aberta pelo cliente OAuth atual. O acesso de upload continuará sendo validado em cada backup.'
+            };
         }
-        return {
-            connected: true,
-            displayName: response.data.user?.displayName || '',
-            emailAddress: response.data.user?.emailAddress || '',
-            baseFolderName
-        };
     }
 
     async getOrCreateFolder(folderName, parentId) {
@@ -193,3 +238,5 @@ class DriveManager {
 }
 
 module.exports = DriveManager;
+module.exports.googleErrorStatus = googleErrorStatus;
+module.exports.isFolderVisibilityError = isFolderVisibilityError;

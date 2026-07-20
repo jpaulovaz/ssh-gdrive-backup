@@ -5,6 +5,78 @@ const path = require('path');
 const crypto = require('crypto');
 const { shellQuote, sanitizeFilePart, calculateChecksums, verifyLocalArchive } = require('./lib/backupIntegrity');
 
+const ACCESS_MODES = new Set(['standard', 'ignore-unreadable', 'sudo']);
+
+function normalizeAccessMode(value) {
+    const mode = String(value || 'standard');
+    return ACCESS_MODES.has(mode) ? mode : 'standard';
+}
+
+function summarizeTarMessages(value, maxLines = 8, maxLength = 2400) {
+    const lines = String(value || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+    if (!lines.length) return '';
+    const selected = lines.slice(0, maxLines);
+    let summary = selected.join(' | ');
+    if (lines.length > maxLines) summary += ` | ... e mais ${lines.length - maxLines} ocorrência(s)`;
+    if (summary.length > maxLength) summary = `${summary.slice(0, maxLength - 3)}...`;
+    return summary;
+}
+
+function buildArchiveCommand(remoteTempFile, parentPath, baseName, accessMode = 'standard') {
+    const mode = normalizeAccessMode(accessMode);
+    const tarOptions = mode === 'ignore-unreadable'
+        ? '--warning=no-file-changed --ignore-failed-read'
+        : '--warning=no-file-changed';
+    const tarExecutable = mode === 'sudo' ? 'sudo -n tar' : 'tar';
+    const lines = [
+        'set -u',
+        `archive=${shellQuote(remoteTempFile)}`,
+        `parent=${shellQuote(parentPath)}`,
+        `source_name=${shellQuote(baseName)}`,
+        'umask 077',
+        'rm -f -- "$archive"',
+        `${tarExecutable} ${tarOptions} -czf "$archive" -C "$parent" -- "$source_name"`,
+        'tar_rc=$?',
+        'if [ "$tar_rc" -ne 0 ] && [ ! -s "$archive" ]; then exit "$tar_rc"; fi',
+        'if [ "$tar_rc" -gt 1 ]; then exit "$tar_rc"; fi'
+    ];
+
+    if (mode === 'sudo') {
+        lines.push(
+            'if ! sudo -n chown "$(id -u):$(id -g)" -- "$archive"; then printf "Não foi possível transferir a propriedade do arquivo criado com sudo.\n" >&2; exit 93; fi',
+            'chmod 600 -- "$archive" || exit 94'
+        );
+    }
+
+    lines.push(
+        'test -s "$archive" || exit 91',
+        'tar -tzf "$archive" >/dev/null || exit 92',
+        'archive_size=$(wc -c < "$archive" | tr -d "[:space:]")',
+        'archive_sha=$(sha256sum "$archive" | awk "{print \\$1}")',
+        'printf "BACKUP_META:%s:%s:%s\\n" "$tar_rc" "$archive_size" "$archive_sha"'
+    );
+
+    return lines.join('\n');
+}
+
+function formatTarFailure(detail, accessMode) {
+    const mode = normalizeAccessMode(accessMode);
+    const text = String(detail || 'Falha desconhecida durante a compactação.');
+
+    if (mode === 'sudo' && /sudo:|password is required|a password is required|not allowed to execute|not in the sudoers|a terminal is required/i.test(text)) {
+        return `Falha na compactação com sudo sem senha: ${text} Configure NOPASSWD para os comandos necessários ou selecione outro modo de acesso.`;
+    }
+
+    if (mode === 'standard' && /permission denied|cannot open|cannot stat/i.test(text)) {
+        return `Falha na compactação por falta de permissão de leitura: ${text} Edite esta pasta e use "sudo sem senha" para um backup completo, ou "ignorar itens sem permissão" caso aceite um backup parcial identificado com alerta.`;
+    }
+
+    return `Falha na compactação ou validação remota: ${text}`;
+}
+
 class SSHManager {
     constructor(serverConfig) {
         this.config = serverConfig;
@@ -62,9 +134,13 @@ class SSHManager {
         });
     }
 
-    async cleanupRemoteFile(remoteFile, existingConnection = null) {
+    async cleanupRemoteFile(remoteFile, existingConnection = null, useSudo = false) {
         const attempt = async connection => {
-            const result = await this.execCommand(connection, `rm -f -- ${shellQuote(remoteFile)}`);
+            const quotedFile = shellQuote(remoteFile);
+            const command = useSudo
+                ? `rm -f -- ${quotedFile} 2>/dev/null || sudo -n rm -f -- ${quotedFile}`
+                : `rm -f -- ${quotedFile}`;
+            const result = await this.execCommand(connection, command);
             if (result.code !== 0) {
                 throw new Error(result.stderr.trim() || `rm retornou código ${result.code}`);
             }
@@ -91,15 +167,24 @@ class SSHManager {
         }
     }
 
-    async _createRemoteBackup(remotePath, localDest, backupName, onProgress, deadline) {
+    async _createRemoteBackup(remotePath, localDest, backupName, onProgress, deadline, options = {}) {
         let conn = null;
         let remoteTempFile = null;
         const warnings = [];
+        const accessMode = normalizeAccessMode(options.accessMode);
+        const useSudoCleanup = accessMode === 'sudo';
 
         try {
             conn = await this.connect();
             this.activeConnection = conn;
-            if (onProgress) onProgress('Conectado. Iniciando compactação...');
+            if (onProgress) {
+                const message = accessMode === 'sudo'
+                    ? 'Conectado. Iniciando compactação com sudo sem senha...'
+                    : accessMode === 'ignore-unreadable'
+                        ? 'Conectado. Iniciando compactação; itens sem permissão serão ignorados e registrados...'
+                        : 'Conectado. Iniciando compactação...';
+                onProgress(message);
+            }
 
             const normalizedPath = path.posix.normalize(remotePath);
             const parentPath = path.posix.dirname(normalizedPath);
@@ -111,26 +196,11 @@ class SSHManager {
             const localFilePath = path.join(localDest, fileName);
             this.activeLocalPath = localFilePath;
 
-            const command = [
-                'set -u',
-                `archive=${shellQuote(remoteTempFile)}`,
-                `parent=${shellQuote(parentPath)}`,
-                `source_name=${shellQuote(baseName)}`,
-                'rm -f -- "$archive"',
-                'tar --warning=no-file-changed -czf "$archive" -C "$parent" -- "$source_name"',
-                'tar_rc=$?',
-                'if [ "$tar_rc" -gt 1 ]; then exit "$tar_rc"; fi',
-                'test -s "$archive" || exit 91',
-                'tar -tzf "$archive" >/dev/null || exit 92',
-                'archive_size=$(wc -c < "$archive" | tr -d "[:space:]")',
-                'archive_sha=$(sha256sum "$archive" | awk "{print \\$1}")',
-                'printf "BACKUP_META:%s:%s:%s\\n" "$tar_rc" "$archive_size" "$archive_sha"'
-            ].join('\n');
-
+            const command = buildArchiveCommand(remoteTempFile, parentPath, baseName, accessMode);
             const tarResult = await this.execCommand(conn, command);
             if (tarResult.code !== 0) {
                 const detail = tarResult.stderr.trim() || tarResult.stdout.trim() || `código ${tarResult.code}`;
-                throw new Error(`Falha na compactação ou validação remota: ${detail}`);
+                throw new Error(formatTarFailure(detail, accessMode));
             }
 
             const metadataMatch = tarResult.stdout.match(/BACKUP_META:(\d+):(\d+):([a-f0-9]{64})/i);
@@ -140,8 +210,12 @@ class SSHManager {
             const tarExitCode = Number(metadataMatch[1]);
             const remoteSize = Number(metadataMatch[2]);
             const remoteSha256 = metadataMatch[3].toLowerCase();
+            const tarMessages = summarizeTarMessages(tarResult.stderr);
+
             if (tarExitCode === 1) {
-                warnings.push(`O tar retornou alerta durante a compactação, mas o arquivo final passou no teste de integridade.${tarResult.stderr.trim() ? ` Detalhe: ${tarResult.stderr.trim()}` : ''}`);
+                warnings.push(`O tar retornou alerta durante a compactação, mas o arquivo final passou no teste de integridade.${tarMessages ? ` Detalhe: ${tarMessages}` : ''}`);
+            } else if (accessMode === 'ignore-unreadable' && tarMessages) {
+                warnings.push(`Backup parcial permitido: o tar ignorou ou sinalizou itens que não puderam ser lidos. Detalhe: ${tarMessages}`);
             }
 
             if (onProgress) onProgress('Compactação validada. Baixando...');
@@ -184,7 +258,7 @@ class SSHManager {
             await verifyLocalArchive(localFilePath, remainingMs);
 
             if (onProgress) onProgress('Removendo arquivo temporário remoto...');
-            const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn);
+            const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn, false);
             if (cleanupWarning) warnings.push(cleanupWarning);
             remoteTempFile = null;
 
@@ -194,12 +268,13 @@ class SSHManager {
                 size: remoteSize,
                 sha256: checksums.sha256,
                 md5: checksums.md5,
+                accessMode,
                 warnings
             };
         } catch (error) {
             if (this.activeLocalPath) await fsp.rm(this.activeLocalPath, { force: true }).catch(() => undefined);
             if (remoteTempFile) {
-                const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn);
+                const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn, useSudoCleanup);
                 if (cleanupWarning) error.cleanupWarning = cleanupWarning;
             }
             throw error;
@@ -210,7 +285,7 @@ class SSHManager {
         }
     }
 
-    async createRemoteBackup(remotePath, localDest, backupName, onProgress, timeoutMinutes = 60) {
+    async createRemoteBackup(remotePath, localDest, backupName, onProgress, timeoutMinutes = 60, options = {}) {
         const timeoutMs = timeoutMinutes * 60 * 1000;
         const deadline = Date.now() + timeoutMs;
         let timedOut = false;
@@ -221,7 +296,7 @@ class SSHManager {
         }, timeoutMs);
 
         try {
-            return await this._createRemoteBackup(remotePath, localDest, backupName, onProgress, deadline);
+            return await this._createRemoteBackup(remotePath, localDest, backupName, onProgress, deadline, options);
         } catch (error) {
             if (timedOut) {
                 const timeoutError = new Error(`Tempo limite de ${timeoutMinutes} minutos excedido no backup SSH.`);
@@ -236,3 +311,7 @@ class SSHManager {
 }
 
 module.exports = SSHManager;
+module.exports.normalizeAccessMode = normalizeAccessMode;
+module.exports.summarizeTarMessages = summarizeTarMessages;
+module.exports.buildArchiveCommand = buildArchiveCommand;
+module.exports.formatTarFailure = formatTarFailure;

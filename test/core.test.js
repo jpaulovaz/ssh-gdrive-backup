@@ -11,6 +11,8 @@ const AtomicJsonStore = require('../lib/atomicJsonStore');
 const SecurityManager = require('../lib/securityManager');
 const { SettingsStore } = require('../lib/settingsStore');
 const { normalizeSettings, validateRemotePath } = require('../lib/validation');
+const DriveManager = require('../driveManager');
+const SSHManager = require('../sshManager');
 const { calculateNextRun } = require('../lib/scheduler');
 const { parseCookies, serializeCookie } = require('../lib/cookies');
 const { shellQuote, sanitizeFilePart, calculateChecksums, sha256File, md5File, verifyLocalArchive } = require('../lib/backupIntegrity');
@@ -89,6 +91,7 @@ test('SettingsStore migra segredos legados sem mantê-los em texto puro', async 
     assert.equal(privateSettings.google.clientSecret, 'client-secret-plain');
     assert.equal(privateSettings.google.refreshToken, 'refresh-token-plain');
     assert.equal(privateSettings.servers[0].password, 'ssh-password-plain');
+    assert.equal(privateSettings.servers[0].backups[0].accessMode, 'standard');
 
     const raw = await fsp.readFile(settingsFile, 'utf8');
     assert.equal(raw.includes('client-secret-plain'), false);
@@ -106,19 +109,20 @@ test('SettingsStore migra segredos legados sem mantê-los em texto puro', async 
 test('Validação preserva segredos existentes e bloqueia entradas perigosas', () => {
     const current = {
         google: { clientId: 'id', clientSecret: 'secret', refreshToken: 'token', baseFolderId: '' },
-        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: 'pass', backups: [{ name: 'data', remotePath: '/srv/data' }] }],
+        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: 'pass', backups: [{ name: 'data', remotePath: '/srv/data', accessMode: 'standard' }] }],
         system: { port: 8990, retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
         schedule: { enabled: true, time: '00:00', days: [0] }
     };
     const normalized = normalizeSettings({
         google: { clientId: 'id2', clientSecret: '', baseFolderId: '' },
-        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: '', backups: [{ name: 'data', remotePath: '/srv/data' }] }],
+        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: '', backups: [{ name: 'data', remotePath: '/srv/data', accessMode: 'sudo' }] }],
         system: { retentionLimit: 3, backupTimeout: 90, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
         schedule: { enabled: true, time: '02:30', days: [1, 1, 2] }
     }, current);
     assert.equal(normalized.google.clientSecret, 'secret');
     assert.equal(normalized.google.refreshToken, 'token');
     assert.equal(normalized.servers[0].password, 'pass');
+    assert.equal(normalized.servers[0].backups[0].accessMode, 'sudo');
     assert.deepEqual(normalized.schedule.days, [1, 2]);
     assert.throws(() => validateRemotePath('/'), /diretório raiz/);
     assert.throws(() => normalizeSettings({
@@ -157,6 +161,71 @@ test('Cookie de sessão usa atributos de proteção', () => {
     assert.match(cookie, /SameSite=Strict/);
     assert.match(cookie, /Secure/);
     assert.equal(parseCookies('a=1; session=abc').session, 'abc');
+});
+
+
+test('Validação aplica modo normal em backups antigos e rejeita modo desconhecido', () => {
+    const current = {
+        google: { clientId: '', clientSecret: '', refreshToken: '', baseFolderId: '' },
+        servers: [],
+        system: { port: 8990, retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
+        schedule: { enabled: false, time: '00:00', days: [] }
+    };
+    const normalized = normalizeSettings({
+        google: {},
+        servers: [{
+            id: 'srv', host: 'host', port: 22, username: 'user', password: 'pass',
+            backups: [{ name: 'dados', remotePath: '/srv/dados' }]
+        }],
+        system: { retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
+        schedule: { enabled: false, time: '00:00', days: [] }
+    }, current);
+    assert.equal(normalized.servers[0].backups[0].accessMode, 'standard');
+
+    assert.throws(() => normalizeSettings({
+        google: {},
+        servers: [{
+            id: 'srv', host: 'host', port: 22, username: 'user', password: 'pass',
+            backups: [{ name: 'dados', remotePath: '/srv/dados', accessMode: 'root-total' }]
+        }],
+        system: { retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
+        schedule: { enabled: false, time: '00:00', days: [] }
+    }, current), /Modo de acesso/);
+});
+
+test('Comandos de compactação diferenciam modo estrito, parcial e sudo', () => {
+    const standard = SSHManager.buildArchiveCommand('/tmp/a.tar.gz', '/srv', 'dados', 'standard');
+    const partial = SSHManager.buildArchiveCommand('/tmp/a.tar.gz', '/srv', 'dados', 'ignore-unreadable');
+    const sudo = SSHManager.buildArchiveCommand('/tmp/a.tar.gz', '/srv', 'dados', 'sudo');
+
+    assert.doesNotMatch(standard, /ignore-failed-read/);
+    assert.doesNotMatch(standard, /sudo -n tar/);
+    assert.match(partial, /--ignore-failed-read/);
+    assert.match(sudo, /sudo -n tar/);
+    assert.match(sudo, /sudo -n chown/);
+});
+
+test('Status do Google mantém a conta conectada quando a pasta não é visível pelo escopo', async () => {
+    const manager = Object.create(DriveManager.prototype);
+    manager.baseFolderId = 'folder-id';
+    manager.drive = {
+        about: {
+            get: async () => ({ data: { user: { displayName: 'Teste', emailAddress: 'teste@example.com' } } })
+        },
+        files: {
+            get: async () => {
+                const error = new Error('File not found: folder-id.');
+                error.code = 404;
+                throw error;
+            }
+        }
+    };
+
+    const result = await manager.testConnection();
+    assert.equal(result.connected, true);
+    assert.equal(result.emailAddress, 'teste@example.com');
+    assert.equal(result.baseFolderStatus, 'unverified');
+    assert.match(result.baseFolderMessage, /drive\.file/);
 });
 
 test('Checksum e teste local detectam arquivo tar.gz válido', async () => {

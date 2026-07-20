@@ -1,6 +1,6 @@
 # SSH-GDrive Backup Pro
 
-**Versão 1.1.0 — Secure Reliability**
+**Versão 1.1.1 — Resilient Access**
 
 Aplicação Node.js para compactar diretórios remotos por SSH, validar a integridade do arquivo, transferi-lo ao Google Drive e manter retenção controlada por servidor e pasta.
 
@@ -11,7 +11,7 @@ Aplicação Node.js para compactar diretórios remotos por SSH, validar a integr
 3. **Integridade do backup**: o arquivo é testado no servidor, conferido por tamanho e SHA-256 após o download, testado novamente localmente e comparado com o MD5 calculado pelo Google Drive após o upload.
 4. **Retenção segura**: somente arquivos marcados pela própria aplicação podem ser removidos pela rotação. Outros arquivos da pasta do Drive são preservados.
 5. **Concorrência e limpeza**: o mesmo backup não pode ser iniciado duas vezes simultaneamente; arquivos temporários são removidos nos fluxos de finalização e sobras locais são limpas na inicialização.
-6. **Interface e persistência**: autenticação Google integrada, teste real da conexão, controle para ativar o agendamento, cálculo da próxima execução e gravação JSON atômica com cópia de recuperação.
+6. **Interface e persistência**: autenticação Google integrada, status separado entre conta e pasta base, modos de leitura por pasta, controle do agendamento e gravação JSON atômica.
 
 ## Requisitos
 
@@ -73,9 +73,23 @@ Guarde uma cópia protegida de `data/master.key`. Sem essa chave, as senhas e os
 
 A criptografia evita exposição acidental no JSON e pela API. Ela não protege contra um invasor que consiga ler simultaneamente o `settings.json` e o `data/master.key`; as permissões do sistema operacional continuam essenciais.
 
+## Acesso a arquivos sem permissão
+
+Cada pasta cadastrada possui um modo de acesso:
+
+- **Normal**: modo padrão. Qualquer erro de leitura interrompe a execução para evitar um backup silenciosamente incompleto.
+- **Ignorar itens sem permissão**: usa `tar --ignore-failed-read`. O backup pode ser parcial e sempre é registrado como sucesso com alerta quando o `tar` relata itens ignorados.
+- **sudo sem senha**: usa `sudo -n` para compactar e exige configuração prévia de `NOPASSWD` no servidor. A aplicação não reutiliza a senha SSH como senha de sudo.
+
+Para dados de containers, como Loki e Grafana, prefira corrigir permissões por grupo ou ACL. Use o modo sudo apenas quando for necessário obter um backup completo e a política do servidor permitir. O usuário SSH precisa poder executar, sem senha, os comandos `tar`, `chown` e `rm` usados no arquivo temporário.
+
+## Status do Google Drive
+
+A versão 1.1.1 considera a conta conectada quando a chamada de identidade do Google é válida. Se o escopo `drive.file` não permitir consultar diretamente os metadados da pasta base, a interface apresenta um alerta de pasta não validada, sem classificar a autenticação como falha. O acesso efetivo continua sendo confirmado durante o upload e a verificação do backup.
+
 ## Retenção
 
-A retenção da versão 1.1.0 remove somente backups que tenham sido criados e marcados pela própria aplicação para o mesmo servidor e pasta. Backups de versões anteriores, que não possuem esses marcadores, são preservados e devem ser revisados manualmente no Google Drive.
+A retenção remove somente backups que tenham sido criados e marcados pela própria aplicação para o mesmo servidor e pasta. Backups antigos sem esses marcadores são preservados e devem ser revisados manualmente no Google Drive.
 
 ## Recuperação do acesso administrativo
 

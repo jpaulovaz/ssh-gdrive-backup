@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1 - Resilient Access (2026-07-19)
+
+### Google Drive
+
+- O status da conta Google foi separado da validação dos metadados da pasta base.
+- Respostas 403/404 ao consultar a pasta com o escopo `drive.file` não são mais exibidas como falha geral de conexão.
+- A interface passa a mostrar “Google conectado” com alerta quando a conta está válida, mas a pasta não pode ser consultada diretamente.
+- Upload, checksum e retenção continuam sendo validados durante cada execução real.
+
+### Permissões de leitura no servidor
+
+- Cada pasta de backup passa a aceitar três modos: Normal, Ignorar itens sem permissão e sudo sem senha.
+- O modo Normal continua sendo o padrão e interrompe o backup se houver conteúdo ilegível.
+- O modo Ignorar cria um backup parcial, registra os itens problemáticos e conclui com alerta explícito.
+- O modo sudo executa a compactação com `sudo -n`, sem armazenar ou enviar senha de sudo pela aplicação.
+- Mensagens de erro de permissão e de sudo foram ampliadas com orientação operacional.
+
 ## 1.1.0 - Secure Reliability (2026-07-19)
 
 ### Segurança

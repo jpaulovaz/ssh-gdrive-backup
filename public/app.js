@@ -10,6 +10,11 @@ const state = {
 };
 
 const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const backupAccessModeLabels = {
+    standard: 'Normal',
+    'ignore-unreadable': 'Ignorar sem permissão',
+    sudo: 'sudo sem senha'
+};
 const byId = id => document.getElementById(id);
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -160,11 +165,31 @@ function renderGoogleStatus(status) {
     const main = byId('googleStatus');
     const detail = byId('googleStatusDetail');
     const badge = byId('googleConnectionBadge');
-    const label = status.connected ? 'Conectado e validado' : status.configured ? 'Falha de conexão' : 'Não configurado';
-    const level = status.connected ? 'good' : status.configured ? 'warn' : 'bad';
+    let label = 'Não configurado';
+    let level = 'bad';
+
+    if (status.configured && !status.connected) {
+        label = 'Falha de conexão';
+        level = 'warn';
+    } else if (status.connected && status.baseFolderStatus === 'validated') {
+        label = 'Conectado e validado';
+        level = 'good';
+    } else if (status.connected) {
+        label = status.baseFolderStatus === 'invalid' ? 'Conectado; pasta inválida' : 'Google conectado';
+        level = 'warn';
+    }
+
+    const detailParts = [];
+    if (status.connected && status.emailAddress) detailParts.push(status.emailAddress);
+    if (status.baseFolderStatus !== 'validated' && (status.baseFolderMessage || status.message)) {
+        detailParts.push(status.baseFolderMessage || status.message);
+    } else if (!status.connected && status.message) {
+        detailParts.push(status.message);
+    }
+
     main.textContent = label;
     main.className = `status ${level}`;
-    detail.textContent = status.connected && status.emailAddress ? status.emailAddress : status.message || '';
+    detail.textContent = detailParts.join(' · ');
     badge.textContent = label;
     badge.className = `badge ${level}`;
     byId('googleDisconnectButton').disabled = !status.configured;
@@ -260,7 +285,11 @@ function renderServersList() {
         header.append(titleBlock, actions);
         card.append(header);
         const tags = createElement('div', 'tags');
-        for (const backup of server.backups) tags.append(createElement('span', 'tag', backup.name));
+        for (const backup of server.backups) {
+            const mode = backup.accessMode || 'standard';
+            const suffix = mode === 'standard' ? '' : ` · ${backupAccessModeLabels[mode] || mode}`;
+            tags.append(createElement('span', 'tag', `${backup.name}${suffix}`));
+        }
         card.append(tags);
         container.append(card);
     }
@@ -311,7 +340,11 @@ function collectSettings() {
             port: Number(server.port || 22),
             username: server.username,
             password: server.password || '',
-            backups: server.backups.map(backup => ({ name: backup.name, remotePath: backup.remotePath }))
+            backups: server.backups.map(backup => ({
+                name: backup.name,
+                remotePath: backup.remotePath,
+                accessMode: backup.accessMode || 'standard'
+            }))
         })),
         system: {
             port: state.settings.system.port,
@@ -337,7 +370,7 @@ async function saveAllSettings(showSuccess = true) {
     return result;
 }
 
-function addFolderRow(name = '', remotePath = '') {
+function addFolderRow(name = '', remotePath = '', accessMode = 'standard') {
     const row = createElement('div', 'folder-row');
     const nameLabel = createElement('label', '', 'Nome');
     const nameInput = document.createElement('input');
@@ -354,10 +387,26 @@ function addFolderRow(name = '', remotePath = '') {
     pathInput.value = remotePath;
     pathLabel.append(pathInput);
 
+    const modeLabel = createElement('label', '', 'Acesso de leitura');
+    const modeSelect = document.createElement('select');
+    modeSelect.className = 'folder-access-mode';
+    [
+        ['standard', 'Normal — falhar sem permissão'],
+        ['ignore-unreadable', 'Ignorar itens sem permissão'],
+        ['sudo', 'sudo sem senha — backup completo']
+    ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        option.selected = value === (accessMode || 'standard');
+        modeSelect.append(option);
+    });
+    modeLabel.append(modeSelect);
+
     const remove = createElement('button', 'button danger-outline compact', 'Remover');
     remove.type = 'button';
     remove.addEventListener('click', () => row.remove());
-    row.append(nameLabel, pathLabel, remove);
+    row.append(nameLabel, pathLabel, modeLabel, remove);
     byId('modalFolders').append(row);
 }
 
@@ -374,7 +423,8 @@ function openServerDialog(serverId = null) {
     byId('mServerPass').placeholder = server?.hasPassword ? 'Configurada; deixe em branco para preservar' : 'Informe a senha SSH';
     byId('mServerPass').required = !server;
     byId('modalFolders').replaceChildren();
-    (server?.backups || [{ name: '', remotePath: '' }]).forEach(backup => addFolderRow(backup.name, backup.remotePath));
+    (server?.backups || [{ name: '', remotePath: '', accessMode: 'standard' }])
+        .forEach(backup => addFolderRow(backup.name, backup.remotePath, backup.accessMode || 'standard'));
     showError('serverFormError', '');
     byId('serverDialog').showModal();
 }
@@ -386,7 +436,12 @@ function closeServerDialog() {
 function collectServerFromDialog() {
     const backups = [...byId('modalFolders').querySelectorAll('.folder-row')].map(row => {
         const inputs = row.querySelectorAll('input');
-        return { name: inputs[0].value.trim(), remotePath: inputs[1].value.trim() };
+        const accessMode = row.querySelector('.folder-access-mode')?.value || 'standard';
+        return {
+            name: inputs[0].value.trim(),
+            remotePath: inputs[1].value.trim(),
+            accessMode
+        };
     }).filter(backup => backup.name || backup.remotePath);
     return {
         id: byId('mServerId').value.trim(),
