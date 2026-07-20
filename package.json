@@ -1,6 +1,6 @@
 {
   "name": "ssh-gdrive-backup",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Backups via SSH com validação de integridade, retenção segura e envio ao Google Drive.",
   "main": "index.js",
   "scripts": {

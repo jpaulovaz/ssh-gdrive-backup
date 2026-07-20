@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.2 - Sudo Password Backup (2026-07-20)
+
+### Backup completo sem alteração no servidor remoto
+
+- O modo `sudo` passa a aceitar autenticação por senha, sem exigir configuração `NOPASSWD` no servidor de origem.
+- Por padrão, o aplicativo reutiliza a senha SSH como senha do sudo; também é possível cadastrar uma senha sudo diferente por servidor.
+- A senha sudo é armazenada com AES-256-GCM usando a mesma chave mestra dos demais segredos.
+- A senha é enviada pelo `stdin` do canal SSH, codificada apenas para transporte, e nunca é incluída na linha de comando remota.
+- A execução solicita pseudo-terminal, desativa o eco durante o recebimento da senha e remove possíveis segredos das saídas capturadas.
+- Compactação, validação, ajuste de propriedade e permissões são executados dentro de uma única sessão privilegiada, evitando expiração do cache do sudo durante backups longos.
+- O arquivo temporário remoto também pode ser removido com sudo e senha em fluxos de falha.
+- Configurações existentes no modo `sudo` são migradas automaticamente para reutilizar a senha SSH.
+
 ## 1.1.1 - Resilient Access (2026-07-19)
 
 ### Google Drive

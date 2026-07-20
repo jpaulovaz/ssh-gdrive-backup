@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { shellQuote, sanitizeFilePart, calculateChecksums, verifyLocalArchive } = require('./lib/backupIntegrity');
 
 const ACCESS_MODES = new Set(['standard', 'ignore-unreadable', 'sudo']);
+const SUDO_INPUT_READY_MARKER = '__SSH_GDRIVE_SUDO_PASSWORD_READY__';
 
 function normalizeAccessMode(value) {
     const mode = String(value || 'standard');
@@ -25,53 +26,127 @@ function summarizeTarMessages(value, maxLines = 8, maxLength = 2400) {
     return summary;
 }
 
+function buildPrivilegedArchiveScript(remoteTempFile, parentPath, baseName) {
+    return [
+        'set -u',
+        'exec </dev/null',
+        `archive=${shellQuote(remoteTempFile)}`,
+        `parent=${shellQuote(parentPath)}`,
+        `source_name=${shellQuote(baseName)}`,
+        'target_uid=$1',
+        'target_gid=$2',
+        'umask 077',
+        'rm -f -- "$archive"',
+        'tar --warning=no-file-changed -czf "$archive" -C "$parent" -- "$source_name"',
+        'tar_rc=$?',
+        'if [ "$tar_rc" -ne 0 ] && [ ! -s "$archive" ]; then exit "$tar_rc"; fi',
+        'if [ "$tar_rc" -gt 1 ]; then exit "$tar_rc"; fi',
+        'chown "${target_uid}:${target_gid}" -- "$archive" || exit 93',
+        'chmod 600 -- "$archive" || exit 94',
+        'test -s "$archive" || exit 91',
+        'tar -tzf "$archive" >/dev/null || exit 92',
+        'archive_size=$(wc -c < "$archive" | tr -d "[:space:]")',
+        'archive_sha=$(sha256sum "$archive" | awk "{print \\$1}")',
+        'printf "BACKUP_META:%s:%s:%s\\n" "$tar_rc" "$archive_size" "$archive_sha"'
+    ].join('\n');
+}
+
+function buildSudoPasswordWrapper(privilegedScript) {
+    return [
+        'set -u',
+        'target_uid=$(id -u)',
+        'target_gid=$(id -g)',
+        'if [ -t 0 ]; then stty -echo 2>/dev/null || true; fi',
+        `printf "${SUDO_INPUT_READY_MARKER}\n"`,
+        'IFS= read -r sudo_password_b64',
+        'read_rc=$?',
+        'if [ -t 0 ]; then stty echo 2>/dev/null || true; fi',
+        'if [ "$read_rc" -ne 0 ] || [ -z "${sudo_password_b64:-}" ]; then printf "A senha do sudo não foi recebida pela sessão SSH.\\n" >&2; exit 96; fi',
+        'if ! command -v base64 >/dev/null 2>&1; then unset sudo_password_b64; printf "O comando base64 não está disponível no servidor remoto.\\n" >&2; exit 95; fi',
+        'sudo_password=$(printf "%s" "$sudo_password_b64" | base64 -d 2>/dev/null)',
+        'decode_rc=$?',
+        'unset sudo_password_b64',
+        'if [ "$decode_rc" -ne 0 ]; then unset sudo_password; printf "Não foi possível decodificar a senha do sudo.\\n" >&2; exit 95; fi',
+        `printf "%s\\n" "$sudo_password" | sudo -S -k -p "" sh -c ${shellQuote(privilegedScript)} backup-root "$target_uid" "$target_gid"`,
+        'sudo_rc=$?',
+        'sudo -k >/dev/null 2>&1 || true',
+        'unset sudo_password',
+        'exit "$sudo_rc"'
+    ].join('\n');
+}
+
 function buildArchiveCommand(remoteTempFile, parentPath, baseName, accessMode = 'standard') {
     const mode = normalizeAccessMode(accessMode);
+    if (mode === 'sudo') {
+        return buildSudoPasswordWrapper(buildPrivilegedArchiveScript(remoteTempFile, parentPath, baseName));
+    }
+
     const tarOptions = mode === 'ignore-unreadable'
         ? '--warning=no-file-changed --ignore-failed-read'
         : '--warning=no-file-changed';
-    const tarExecutable = mode === 'sudo' ? 'sudo -n tar' : 'tar';
-    const lines = [
+    return [
         'set -u',
         `archive=${shellQuote(remoteTempFile)}`,
         `parent=${shellQuote(parentPath)}`,
         `source_name=${shellQuote(baseName)}`,
         'umask 077',
         'rm -f -- "$archive"',
-        `${tarExecutable} ${tarOptions} -czf "$archive" -C "$parent" -- "$source_name"`,
+        `tar ${tarOptions} -czf "$archive" -C "$parent" -- "$source_name"`,
         'tar_rc=$?',
         'if [ "$tar_rc" -ne 0 ] && [ ! -s "$archive" ]; then exit "$tar_rc"; fi',
-        'if [ "$tar_rc" -gt 1 ]; then exit "$tar_rc"; fi'
-    ];
-
-    if (mode === 'sudo') {
-        lines.push(
-            'if ! sudo -n chown "$(id -u):$(id -g)" -- "$archive"; then printf "Não foi possível transferir a propriedade do arquivo criado com sudo.\n" >&2; exit 93; fi',
-            'chmod 600 -- "$archive" || exit 94'
-        );
-    }
-
-    lines.push(
+        'if [ "$tar_rc" -gt 1 ]; then exit "$tar_rc"; fi',
         'test -s "$archive" || exit 91',
         'tar -tzf "$archive" >/dev/null || exit 92',
         'archive_size=$(wc -c < "$archive" | tr -d "[:space:]")',
         'archive_sha=$(sha256sum "$archive" | awk "{print \\$1}")',
         'printf "BACKUP_META:%s:%s:%s\\n" "$tar_rc" "$archive_size" "$archive_sha"'
-    );
+    ].join('\n');
+}
 
-    return lines.join('\n');
+function buildSudoCleanupCommand(remoteFile) {
+    const privilegedScript = [
+        'set -u',
+        'exec </dev/null',
+        `rm -f -- ${shellQuote(remoteFile)}`
+    ].join('\n');
+    return buildSudoPasswordWrapper(privilegedScript);
+}
+
+function buildSudoInput(password) {
+    const value = String(password ?? '');
+    if (!value) throw new Error('A senha do sudo não está configurada para este servidor.');
+    if (/\0|[\r\n]/.test(value)) throw new Error('A senha do sudo não pode conter quebra de linha ou caractere nulo.');
+    return `${Buffer.from(value, 'utf8').toString('base64')}\n`;
+}
+
+function redactText(value, redactions = []) {
+    let text = String(value || '');
+    for (const secret of redactions) {
+        const token = String(secret || '');
+        if (token) text = text.split(token).join('[SEGREDO REMOVIDO]');
+    }
+    return text;
 }
 
 function formatTarFailure(detail, accessMode) {
     const mode = normalizeAccessMode(accessMode);
     const text = String(detail || 'Falha desconhecida durante a compactação.');
 
-    if (mode === 'sudo' && /sudo:|password is required|a password is required|not allowed to execute|not in the sudoers|a terminal is required/i.test(text)) {
-        return `Falha na compactação com sudo sem senha: ${text} Configure NOPASSWD para os comandos necessários ou selecione outro modo de acesso.`;
+    if (mode === 'sudo') {
+        if (/incorrect password|sorry, try again|authentication failure|senha incorreta/i.test(text)) {
+            return `Falha na compactação com sudo: a senha do sudo foi recusada. Verifique a senha configurada para o servidor. Detalhe: ${text}`;
+        }
+        if (/not in the sudoers|not allowed to execute|may not run sudo|is not allowed to run sudo/i.test(text)) {
+            return `Falha na compactação com sudo: o usuário SSH não tem permissão para executar sudo. Detalhe: ${text}`;
+        }
+        if (/a terminal is required|must have a tty|no tty present/i.test(text)) {
+            return `Falha na compactação com sudo: o servidor recusou a sessão de terminal necessária ao sudo. Detalhe: ${text}`;
+        }
+        return `Falha na compactação com sudo: ${text}`;
     }
 
     if (mode === 'standard' && /permission denied|cannot open|cannot stat/i.test(text)) {
-        return `Falha na compactação por falta de permissão de leitura: ${text} Edite esta pasta e use "sudo sem senha" para um backup completo, ou "ignorar itens sem permissão" caso aceite um backup parcial identificado com alerta.`;
+        return `Falha na compactação por falta de permissão de leitura: ${text} Edite esta pasta e use "sudo com senha" para um backup completo, ou "ignorar itens sem permissão" caso aceite um backup parcial identificado com alerta.`;
     }
 
     return `Falha na compactação ou validação remota: ${text}`;
@@ -115,34 +190,69 @@ class SSHManager {
         });
     }
 
-    execCommand(conn, command) {
+    execCommand(conn, command, options = {}) {
         return new Promise((resolve, reject) => {
-            conn.exec(command, (error, stream) => {
+            const execOptions = options.pty ? { pty: true } : {};
+            conn.exec(command, execOptions, (error, stream) => {
                 if (error) return reject(error);
                 let stdout = '';
                 let stderr = '';
-                stream.on('data', data => { stdout += data.toString(); });
+                let settled = false;
+                const finish = (handler, value) => {
+                    if (settled) return;
+                    settled = true;
+                    handler(value);
+                };
+                let inputSent = false;
+                const sendInput = () => {
+                    if (inputSent || options.input === undefined) return;
+                    inputSent = true;
+                    stream.end(String(options.input));
+                };
+                stream.on('data', data => {
+                    stdout += data.toString();
+                    if (options.inputReadyMarker && stdout.includes(options.inputReadyMarker)) sendInput();
+                });
                 stream.stderr.on('data', data => { stderr += data.toString(); });
-                stream.once('error', reject);
-                stream.once('close', (code, signal) => resolve({
-                    code: Number.isInteger(code) ? code : -1,
-                    signal,
-                    stdout,
-                    stderr
-                }));
+                stream.once('error', errorValue => finish(reject, errorValue));
+                stream.once('close', (code, signal) => {
+                    const marker = String(options.inputReadyMarker || '');
+                    if (marker) stdout = stdout.split(`${marker}\r\n`).join('').split(`${marker}\n`).join('').split(marker).join('');
+                    finish(resolve, {
+                        code: Number.isInteger(code) ? code : -1,
+                        signal,
+                        stdout: redactText(stdout, options.redactions),
+                        stderr: redactText(stderr, options.redactions)
+                    });
+                });
+                if (options.input !== undefined && !options.inputReadyMarker) sendInput();
             });
         });
     }
 
-    async cleanupRemoteFile(remoteFile, existingConnection = null, useSudo = false) {
+    _sudoExecutionOptions(password) {
+        const input = buildSudoInput(password);
+        return {
+            input,
+            inputReadyMarker: SUDO_INPUT_READY_MARKER,
+            pty: true,
+            redactions: [password, input.trim()]
+        };
+    }
+
+    async cleanupRemoteFile(remoteFile, existingConnection = null, options = {}) {
+        const accessMode = normalizeAccessMode(options.accessMode);
+        const sudoPassword = options.sudoPassword || '';
         const attempt = async connection => {
-            const quotedFile = shellQuote(remoteFile);
-            const command = useSudo
-                ? `rm -f -- ${quotedFile} 2>/dev/null || sudo -n rm -f -- ${quotedFile}`
-                : `rm -f -- ${quotedFile}`;
-            const result = await this.execCommand(connection, command);
+            const command = accessMode === 'sudo'
+                ? buildSudoCleanupCommand(remoteFile)
+                : `rm -f -- ${shellQuote(remoteFile)}`;
+            const executionOptions = accessMode === 'sudo'
+                ? this._sudoExecutionOptions(sudoPassword)
+                : {};
+            const result = await this.execCommand(connection, command, executionOptions);
             if (result.code !== 0) {
-                throw new Error(result.stderr.trim() || `rm retornou código ${result.code}`);
+                throw new Error(result.stderr.trim() || result.stdout.trim() || `rm retornou código ${result.code}`);
             }
         };
 
@@ -172,14 +282,15 @@ class SSHManager {
         let remoteTempFile = null;
         const warnings = [];
         const accessMode = normalizeAccessMode(options.accessMode);
-        const useSudoCleanup = accessMode === 'sudo';
+        const sudoPassword = options.sudoPassword || '';
 
         try {
+            if (accessMode === 'sudo') buildSudoInput(sudoPassword);
             conn = await this.connect();
             this.activeConnection = conn;
             if (onProgress) {
                 const message = accessMode === 'sudo'
-                    ? 'Conectado. Iniciando compactação com sudo sem senha...'
+                    ? 'Conectado. Iniciando compactação com sudo e senha...'
                     : accessMode === 'ignore-unreadable'
                         ? 'Conectado. Iniciando compactação; itens sem permissão serão ignorados e registrados...'
                         : 'Conectado. Iniciando compactação...';
@@ -197,7 +308,10 @@ class SSHManager {
             this.activeLocalPath = localFilePath;
 
             const command = buildArchiveCommand(remoteTempFile, parentPath, baseName, accessMode);
-            const tarResult = await this.execCommand(conn, command);
+            const executionOptions = accessMode === 'sudo'
+                ? this._sudoExecutionOptions(sudoPassword)
+                : {};
+            const tarResult = await this.execCommand(conn, command, executionOptions);
             if (tarResult.code !== 0) {
                 const detail = tarResult.stderr.trim() || tarResult.stdout.trim() || `código ${tarResult.code}`;
                 throw new Error(formatTarFailure(detail, accessMode));
@@ -258,7 +372,7 @@ class SSHManager {
             await verifyLocalArchive(localFilePath, remainingMs);
 
             if (onProgress) onProgress('Removendo arquivo temporário remoto...');
-            const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn, false);
+            const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn, { accessMode: 'standard' });
             if (cleanupWarning) warnings.push(cleanupWarning);
             remoteTempFile = null;
 
@@ -274,7 +388,10 @@ class SSHManager {
         } catch (error) {
             if (this.activeLocalPath) await fsp.rm(this.activeLocalPath, { force: true }).catch(() => undefined);
             if (remoteTempFile) {
-                const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn, useSudoCleanup);
+                const cleanupWarning = await this.cleanupRemoteFile(remoteTempFile, conn, {
+                    accessMode,
+                    sudoPassword
+                });
                 if (cleanupWarning) error.cleanupWarning = cleanupWarning;
             }
             throw error;
@@ -314,4 +431,6 @@ module.exports = SSHManager;
 module.exports.normalizeAccessMode = normalizeAccessMode;
 module.exports.summarizeTarMessages = summarizeTarMessages;
 module.exports.buildArchiveCommand = buildArchiveCommand;
+module.exports.buildSudoCleanupCommand = buildSudoCleanupCommand;
+module.exports.buildSudoInput = buildSudoInput;
 module.exports.formatTarFailure = formatTarFailure;

@@ -13,7 +13,7 @@ const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const backupAccessModeLabels = {
     standard: 'Normal',
     'ignore-unreadable': 'Ignorar sem permissão',
-    sudo: 'sudo sem senha'
+    sudo: 'sudo com senha'
 };
 const byId = id => document.getElementById(id);
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -340,6 +340,8 @@ function collectSettings() {
             port: Number(server.port || 22),
             username: server.username,
             password: server.password || '',
+            sudoUsesSshPassword: server.sudoUsesSshPassword !== false,
+            sudoPassword: server.sudoPassword || '',
             backups: server.backups.map(backup => ({
                 name: backup.name,
                 remotePath: backup.remotePath,
@@ -370,6 +372,19 @@ async function saveAllSettings(showSuccess = true) {
     return result;
 }
 
+function updateSudoPasswordField() {
+    const useSshPassword = byId('mServerSudoUseSshPassword').checked;
+    const input = byId('mServerSudoPass');
+    input.disabled = useSshPassword;
+    input.required = !useSshPassword && !input.dataset.hasPassword;
+    input.placeholder = useSshPassword
+        ? 'Será usada a senha SSH'
+        : input.dataset.hasPassword === 'true'
+            ? 'Configurada; deixe em branco para preservar'
+            : 'Informe a senha do sudo';
+    if (useSshPassword) input.value = '';
+}
+
 function addFolderRow(name = '', remotePath = '', accessMode = 'standard') {
     const row = createElement('div', 'folder-row');
     const nameLabel = createElement('label', '', 'Nome');
@@ -393,7 +408,7 @@ function addFolderRow(name = '', remotePath = '', accessMode = 'standard') {
     [
         ['standard', 'Normal — falhar sem permissão'],
         ['ignore-unreadable', 'Ignorar itens sem permissão'],
-        ['sudo', 'sudo sem senha — backup completo']
+        ['sudo', 'sudo com senha — backup completo']
     ].forEach(([value, label]) => {
         const option = document.createElement('option');
         option.value = value;
@@ -422,6 +437,10 @@ function openServerDialog(serverId = null) {
     byId('mServerPass').value = '';
     byId('mServerPass').placeholder = server?.hasPassword ? 'Configurada; deixe em branco para preservar' : 'Informe a senha SSH';
     byId('mServerPass').required = !server;
+    byId('mServerSudoUseSshPassword').checked = server?.sudoUsesSshPassword !== false;
+    byId('mServerSudoPass').value = '';
+    byId('mServerSudoPass').dataset.hasPassword = String(Boolean(server?.hasSudoPassword));
+    updateSudoPasswordField();
     byId('modalFolders').replaceChildren();
     (server?.backups || [{ name: '', remotePath: '', accessMode: 'standard' }])
         .forEach(backup => addFolderRow(backup.name, backup.remotePath, backup.accessMode || 'standard'));
@@ -450,6 +469,9 @@ function collectServerFromDialog() {
         username: byId('mServerUser').value.trim(),
         password: byId('mServerPass').value,
         hasPassword: Boolean(state.editingServerId),
+        sudoUsesSshPassword: byId('mServerSudoUseSshPassword').checked,
+        sudoPassword: byId('mServerSudoPass').value,
+        hasSudoPassword: byId('mServerSudoPass').dataset.hasPassword === 'true',
         backups
     };
 }
@@ -576,6 +598,7 @@ function bindEvents() {
     byId('closeServerDialog').addEventListener('click', closeServerDialog);
     byId('cancelServerButton').addEventListener('click', closeServerDialog);
     byId('addFolderButton').addEventListener('click', () => addFolderRow());
+    byId('mServerSudoUseSshPassword').addEventListener('change', updateSudoPasswordField);
     byId('serverForm').addEventListener('submit', saveServer);
     byId('settingsForm').addEventListener('submit', async event => {
         event.preventDefault();

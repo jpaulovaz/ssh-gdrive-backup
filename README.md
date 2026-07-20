@@ -79,9 +79,13 @@ Cada pasta cadastrada possui um modo de acesso:
 
 - **Normal**: modo padrão. Qualquer erro de leitura interrompe a execução para evitar um backup silenciosamente incompleto.
 - **Ignorar itens sem permissão**: usa `tar --ignore-failed-read`. O backup pode ser parcial e sempre é registrado como sucesso com alerta quando o `tar` relata itens ignorados.
-- **sudo sem senha**: usa `sudo -n` para compactar e exige configuração prévia de `NOPASSWD` no servidor. A aplicação não reutiliza a senha SSH como senha de sudo.
+- **sudo com senha**: executa a compactação em uma sessão privilegiada e produz um backup completo dos arquivos que o root consegue ler.
 
-Para dados de containers, como Loki e Grafana, prefira corrigir permissões por grupo ou ACL. Use o modo sudo apenas quando for necessário obter um backup completo e a política do servidor permitir. O usuário SSH precisa poder executar, sem senha, os comandos `tar`, `chown` e `rm` usados no arquivo temporário.
+No cadastro do servidor, a senha do sudo pode reutilizar a senha SSH ou ser informada separadamente. A senha separada é criptografada no `settings.json`, não é devolvida pela API e é enviada ao processo `sudo` pelo `stdin` do canal SSH. Ela não é inserida na linha de comando nem nos logs.
+
+Não é necessário configurar `NOPASSWD`. O usuário SSH precisa apenas já ter permissão para executar `sudo` com senha. O modo não funcionará quando a política do servidor bloquear `sudo`, exigir MFA/aprovação externa ou limitar o usuário a uma lista que não permita executar o shell privilegiado usado pela aplicação.
+
+Para dados alterados continuamente, como WAL e índices do Loki, o acesso completo resolve a falta de permissão, mas não garante consistência transacional. Sempre que possível, use snapshot do volume ou uma janela controlada de parada para o teste definitivo de restauração.
 
 ## Status do Google Drive
 

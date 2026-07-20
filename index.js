@@ -128,7 +128,10 @@ async function runBackup(server, backupConfig, source = 'manual') {
                 backupStatus.set(key, { ...current, status: message, running: true });
             },
             settings.system.backupTimeout || 60,
-            { accessMode: backupConfig.accessMode || 'standard' }
+            {
+                accessMode: backupConfig.accessMode || 'standard',
+                sudoPassword: server.sudoUsesSshPassword !== false ? server.password : server.sudoPassword
+            }
         );
         localPath = sshResult.localPath;
 
@@ -468,7 +471,7 @@ async function start() {
     });
     await googleAuthManager.start(mainPort);
     await setupCron();
-    console.log(`[System] SSH-GDrive Backup Pro v1.1.1 na porta ${mainPort}`);
+    console.log(`[System] SSH-GDrive Backup Pro v1.1.2 na porta ${mainPort}`);
     return server;
 }
 

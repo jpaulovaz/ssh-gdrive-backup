@@ -6,6 +6,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const { EventEmitter } = require('events');
 
 const AtomicJsonStore = require('../lib/atomicJsonStore');
 const SecurityManager = require('../lib/securityManager');
@@ -77,7 +78,9 @@ test('SettingsStore migra segredos legados sem mantê-los em texto puro', async 
         },
         servers: [{
             id: 'srv1', host: '127.0.0.1', port: 22, username: 'root', password: 'ssh-password-plain',
-            backups: [{ name: 'dados', remotePath: '/var/data' }]
+            sudoUsesSshPassword: false,
+            sudoPassword: 'sudo-password-plain',
+            backups: [{ name: 'dados', remotePath: '/var/data', accessMode: 'sudo' }]
         }],
         system: { port: 8990, retentionLimit: 2, backupTimeout: 60, authPort: 3000 },
         schedule: { enabled: true, time: '01:00', days: [1] }
@@ -91,12 +94,15 @@ test('SettingsStore migra segredos legados sem mantê-los em texto puro', async 
     assert.equal(privateSettings.google.clientSecret, 'client-secret-plain');
     assert.equal(privateSettings.google.refreshToken, 'refresh-token-plain');
     assert.equal(privateSettings.servers[0].password, 'ssh-password-plain');
-    assert.equal(privateSettings.servers[0].backups[0].accessMode, 'standard');
+    assert.equal(privateSettings.servers[0].sudoUsesSshPassword, false);
+    assert.equal(privateSettings.servers[0].sudoPassword, 'sudo-password-plain');
+    assert.equal(privateSettings.servers[0].backups[0].accessMode, 'sudo');
 
     const raw = await fsp.readFile(settingsFile, 'utf8');
     assert.equal(raw.includes('client-secret-plain'), false);
     assert.equal(raw.includes('refresh-token-plain'), false);
     assert.equal(raw.includes('ssh-password-plain'), false);
+    assert.equal(raw.includes('sudo-password-plain'), false);
     await assert.rejects(() => fsp.access(`${settingsFile}.bak`));
 
     const publicSettings = await store.getPublic();
@@ -104,24 +110,28 @@ test('SettingsStore migra segredos legados sem mantê-los em texto puro', async 
     assert.equal(publicSettings.google.hasClientSecret, true);
     assert.equal(publicSettings.servers[0].password, '');
     assert.equal(publicSettings.servers[0].hasPassword, true);
+    assert.equal(publicSettings.servers[0].sudoPassword, '');
+    assert.equal(publicSettings.servers[0].hasSudoPassword, true);
 });
 
 test('Validação preserva segredos existentes e bloqueia entradas perigosas', () => {
     const current = {
         google: { clientId: 'id', clientSecret: 'secret', refreshToken: 'token', baseFolderId: '' },
-        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: 'pass', backups: [{ name: 'data', remotePath: '/srv/data', accessMode: 'standard' }] }],
+        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: 'pass', sudoUsesSshPassword: false, sudoPassword: 'sudo-pass', backups: [{ name: 'data', remotePath: '/srv/data', accessMode: 'standard' }] }],
         system: { port: 8990, retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
         schedule: { enabled: true, time: '00:00', days: [0] }
     };
     const normalized = normalizeSettings({
         google: { clientId: 'id2', clientSecret: '', baseFolderId: '' },
-        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: '', backups: [{ name: 'data', remotePath: '/srv/data', accessMode: 'sudo' }] }],
+        servers: [{ id: 'srv', host: 'host', port: 22, username: 'user', password: '', sudoUsesSshPassword: false, sudoPassword: '', backups: [{ name: 'data', remotePath: '/srv/data', accessMode: 'sudo' }] }],
         system: { retentionLimit: 3, backupTimeout: 90, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
         schedule: { enabled: true, time: '02:30', days: [1, 1, 2] }
     }, current);
     assert.equal(normalized.google.clientSecret, 'secret');
     assert.equal(normalized.google.refreshToken, 'token');
     assert.equal(normalized.servers[0].password, 'pass');
+    assert.equal(normalized.servers[0].sudoUsesSshPassword, false);
+    assert.equal(normalized.servers[0].sudoPassword, 'sudo-pass');
     assert.equal(normalized.servers[0].backups[0].accessMode, 'sudo');
     assert.deepEqual(normalized.schedule.days, [1, 2]);
     assert.throws(() => validateRemotePath('/'), /diretório raiz/);
@@ -193,16 +203,80 @@ test('Validação aplica modo normal em backups antigos e rejeita modo desconhec
     }, current), /Modo de acesso/);
 });
 
-test('Comandos de compactação diferenciam modo estrito, parcial e sudo', () => {
+
+test('Validação exige senha sudo separada quando ela não reutiliza a senha SSH', () => {
+    const current = {
+        google: { clientId: '', clientSecret: '', refreshToken: '', baseFolderId: '' },
+        servers: [],
+        system: { port: 8990, retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
+        schedule: { enabled: false, time: '00:00', days: [] }
+    };
+    assert.throws(() => normalizeSettings({
+        google: {},
+        servers: [{
+            id: 'srv', host: 'host', port: 22, username: 'user', password: 'ssh-pass',
+            sudoUsesSshPassword: false,
+            sudoPassword: '',
+            backups: [{ name: 'dados', remotePath: '/srv/dados', accessMode: 'sudo' }]
+        }],
+        system: { retentionLimit: 2, backupTimeout: 60, authCallbackUrl: 'http://localhost:3000/oauth2callback' },
+        schedule: { enabled: false, time: '00:00', days: [] }
+    }, current), /Configure a senha sudo/);
+});
+
+test('Comandos de compactação diferenciam modo estrito, parcial e sudo com senha', () => {
     const standard = SSHManager.buildArchiveCommand('/tmp/a.tar.gz', '/srv', 'dados', 'standard');
     const partial = SSHManager.buildArchiveCommand('/tmp/a.tar.gz', '/srv', 'dados', 'ignore-unreadable');
     const sudo = SSHManager.buildArchiveCommand('/tmp/a.tar.gz', '/srv', 'dados', 'sudo');
+    const sudoInput = SSHManager.buildSudoInput('Senha-Sudo-123');
 
     assert.doesNotMatch(standard, /ignore-failed-read/);
-    assert.doesNotMatch(standard, /sudo -n tar/);
+    assert.doesNotMatch(standard, /sudo -S/);
     assert.match(partial, /--ignore-failed-read/);
-    assert.match(sudo, /sudo -n tar/);
-    assert.match(sudo, /sudo -n chown/);
+    assert.match(sudo, /sudo -S -k -p "" sh -c/);
+    assert.match(sudo, /stty -echo/);
+    assert.match(sudo, /__SSH_GDRIVE_SUDO_PASSWORD_READY__/);
+    assert.match(sudo, /chown/);
+    assert.doesNotMatch(sudo, /Senha-Sudo-123/);
+    assert.equal(Buffer.from(sudoInput.trim(), 'base64').toString('utf8'), 'Senha-Sudo-123');
+    assert.throws(() => SSHManager.buildSudoInput('linha1\nlinha2'), /quebra de linha/);
+    assert.match(SSHManager.formatTarFailure('sudo: 1 incorrect password attempt', 'sudo'), /senha do sudo foi recusada/i);
+});
+
+
+test('Senha sudo só é enviada depois que o eco do terminal remoto foi desativado', async () => {
+    const marker = '__SSH_GDRIVE_SUDO_PASSWORD_READY__';
+    const stream = new EventEmitter();
+    stream.stderr = new EventEmitter();
+    stream.end = value => {
+        stream.sentInput = String(value);
+        setImmediate(() => {
+            stream.emit('data', Buffer.from('BACKUP_META:0:10:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'));
+            stream.emit('close', 0, null);
+        });
+    };
+    let sentBeforeMarker = false;
+    const conn = {
+        exec: (_command, options, callback) => {
+            assert.equal(options.pty, true);
+            callback(null, stream);
+            sentBeforeMarker = Boolean(stream.sentInput);
+            setImmediate(() => stream.emit('data', Buffer.from(`${marker}\r\n`)));
+        }
+    };
+    const manager = Object.create(SSHManager.prototype);
+    const result = await manager.execCommand(conn, 'comando', {
+        pty: true,
+        input: 'U2VuaGE=\n',
+        inputReadyMarker: marker,
+        redactions: ['U2VuaGE=']
+    });
+    assert.equal(sentBeforeMarker, false);
+    assert.equal(stream.sentInput, 'U2VuaGE=\n');
+    assert.equal(result.code, 0);
+    assert.doesNotMatch(result.stdout, /SSH_GDRIVE_SUDO_PASSWORD_READY/);
+    assert.doesNotMatch(result.stdout, /U2VuaGE=/);
+    assert.match(result.stdout, /BACKUP_META/);
 });
 
 test('Status do Google mantém a conta conectada quando a pasta não é visível pelo escopo', async () => {

@@ -1,3 +1,24 @@
+# Atualização para a versão 1.1.2
+
+## Alteração desta versão
+
+O modo de pasta **sudo** agora usa senha e não depende de `NOPASSWD`. Na migração, servidores existentes passam a reutilizar a senha SSH como senha sudo. Caso a senha seja diferente, edite o servidor, desmarque **Usar a mesma senha SSH para executar sudo** e informe a senha específica.
+
+A atualização não adiciona dependências e não exige `npm install`. Preserve `settings.json`, `history.json`, `data/` e `node_modules`.
+
+## Aplicação dos arquivos modificados
+
+1. Pare o processo da aplicação.
+2. Faça backup de `settings.json`, `history.json` e `data/master.key`.
+3. Extraia o pacote de arquivos modificados sobre a raiz da aplicação, preservando os caminhos.
+4. Reinicie o processo.
+5. Edite o servidor e confirme que as pastas protegidas estão no modo **sudo com senha**.
+6. Execute um backup manual e faça um teste de extração em diretório isolado.
+
+Não é necessário alterar `sudoers` no servidor remoto. O usuário SSH precisa já conseguir executar `sudo` informando uma senha.
+
+---
+
 # Atualização para a versão 1.1.0
 
 ## Antes de atualizar
